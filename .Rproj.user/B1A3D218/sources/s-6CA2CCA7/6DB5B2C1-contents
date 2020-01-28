@@ -1,0 +1,38 @@
+---
+title: "DPS Incident Database Visualizations"
+author: "J.Wente"
+date: "1/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(rjson)
+library(magrittr)
+library(tidyverse)
+library(stringi)
+library(tidycensus)
+library(tidycensus)
+library(lubridate)
+
+```
+
+After running the dps_data_process, here we have a small dataset that we can now begin to plot aggregations.
+using dps3 for injury and alcohol incidents. Using dps2 for all else. 
+
+```{r}
+#Seatbelt use by county
+sb<-dps2 %>% group_by(seatBelt,county) %>% summarize(Count=sum(Count)) %>% arrange(Count) %>% filter(seatBelt=="No") %>% 
+            arrange(Count) %>%
+            ggplot(aes(x=reorder(county,-Count),y=Count)) + geom_bar(stat="identity") + 
+          theme(axis.text.x=element_text(angle = 90)) + ggtitle("No Seatbelt use in DPS Incident Data") 
+sb
+
+# Acohol by county
+
+alc<- dps3 %>% ggplot(aes(x=reorder(county,-AlcYes),y=AlcYes)) + geom_bar(stat="identity") +    
+                  theme(axis.text.x=element_text(angle = 90)) 
+
+```
+

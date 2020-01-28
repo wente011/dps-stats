@@ -1,0 +1,251 @@
+---
+title: "Crime Analysis"
+author: "J.Wente"
+output: html_document
+---
+#Load data
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(lubridate)
+library(tidycensus)
+library(readxl)
+library(sf)
+library(raster)
+library(tmap)
+library(rgdal) # for the GIS work needed to get in Census data into this dataset.
+library(xts)
+library(tidyverse)
+library(gridExtra)
+library(leaflet)
+library(RCurl)
+library(XML)
+library(rlist)
+library(zoo)
+library(rnoaa)
+library(curl)
+library(RSocrata)
+library(imputeTS)
+library(magrittr)
+library(effects)
+require(nnet)
+require(devtools)
+
+```
+
+## Overview
+The goal is to play with the easily accessible St. Paul Police incident database. We can pull data from several different sources to create probablistic models. At first glance, there really appears to be strong seasonality in the St. Paul crime data. 
+
+In this markdown, we're going to make use of the available data, create some plots, and eventually test some crime forecasting models. 
+
+To acess the crime data, you'll need a Socrata account and a key. 
+
+Run the weather data nd the econdata scripts first, but I'll include those here as well. I am working on getting more and more data into here. At the moment, I am working on getting census data in here as well as twitter data for the St. Paul geocode. 
+
+## Tokens needed 
+You're going to need API tokens for 1) The St. Paul Socrata website. 2) API token for the US Census. 
+
+
+```{r data loading, include=FALSE}
+#Your Socrata credentials here. 
+Sys.getenv("SOCRATA_EMAIL", "wente011@gmail.com")
+Sys.getenv("SOCRATA_PASSWORD", "2018Data23!")
+token="lxfC2o86PruIlgfIimrzGb8Q5"
+
+#load the crime data using the RSocrata function.
+crime <- read.socrata("https://information.stpaul.gov/resource/xytm-mbqv.csv",app_token =token)
+
+crime$incident_type %<>% as.factor()
+crime$incident %<>% as.factor()
+crime$datetime<-paste0(crime$DATE," ",crime$time)
+crime %<>% as_tibble()
+crime$date %<>% as.Date()  
+
+```
+
+```{r econ data, message=FALSE, warning=FALSE, include=FALSE}
+#load packages
+
+#Get the unemployment statistics from DEED for St. Paul using XML. The URL is for monthly data from 2010 to 2019.
+
+sue<-"https://apps.deed.state.mn.us/lmi/laus/Results.aspx?geog=2705123095&adjusted=0&periodtype=03&resultset=3&startyear=2010&endyear=2019"
+
+theurl <- getURL(sue,.opts = list(ssl.verifypeer = FALSE))
+tables <- readHTMLTable(theurl) %>% list.clean(fun = is.null, recursive = FALSE)
+n.rows <- unlist(lapply(tables, function(t) dim(t)[1]))
+sue<-tables[[which.max(n.rows)]] %>% as_tibble()
+names(sue)<-c("ym","unemploy_rate")
+sue$ym %<>% paste0("-01") 
+sue$ym %<>% ymd()
+
+sue$unemploy_rate %<>% as.character() %>% as.numeric() 
+sue[,2]<-sue[,2]/100
+
+sue$unemploy_ratex<-xts(sue$unemploy_rate,order.by=sue$ym)
+sue<-sue[order(sue$ym),]
+
+
+url2<-"https://apps.deed.state.mn.us/lmi/laus/Results.aspx?geog=2705123095&adjusted=0&periodtype=03&resultset=2&startyear=2010&endyear=2019"
+theurl <- getURL(url2,.opts = list(ssl.verifypeer = FALSE))
+tables <- readHTMLTable(theurl) %>% list.clean(fun = is.null, recursive = FALSE)
+n.rows <- unlist(lapply(tables, function(t) dim(t)[1]))
+su<-tables[[which.max(n.rows)]] %>% as_tibble()
+names(su)<-c("ym","unemploy")
+su$ym %<>% paste0("-01") 
+su$ym %<>% ymd()
+
+su$unemploy<-gsub(",","",as.character(su$unemploy)) %>% as.numeric()
+
+sue<-left_join(sue,su)
+
+tsm<-seq.Date(from=min(sue$ym),to=max(sue$ym),by="week") %>% enframe()
+names(tsm)<-c("idx","ym")
+sue2<-full_join(tsm,sue[,-3])
+sue2<-sue2[order(sue2$ym),]
+
+sue2 %<>% mutate_at(c("unemploy_rate","unemploy"),function(x) na_interpolation(x,option="spline"))
+
+sue2$week<-week(sue2$ym)
+sue2$year<-year(sue2$ym)
+sue2$idx<-NULL
+
+```
+
+```{r weather data, include=FALSE, warning = FALSE}
+
+wd<-"https://www.ncdc.noaa.gov/cdo-web/api/v2/{endpoint}"
+tok<-"ZsgzPKqkVyrdJeHfPpuCaCmtfFhtimYv"
+options(noaakey = tok) #TOKEN HERE
+
+ncdc_datasets(stationid = "GHCND:USW00014922",token=tok)  #view datasets for Minneapolis-St. Paul airport.
+
+#unique data set id = gov.noaa.ncdc:C00861
+
+wd<-meteo_tidy_ghcnd(stationid = "USW00014922")  #excellent function for grabbing tidy meteorlogical data. #blessed 
+wd$tmean<-((wd$tmax/10+wd$tmin/10)/2)*(9/5) + 32 #need to convert units here. 
+wd$tmean
+
+
+wd$HDD<-ifelse(wd$tmean<65,abs(wd$tmean),0)
+wd$CDD<-ifelse(wd$tmean>65,abs(wd$tmean),0)
+
+
+wd$week<-week(wd$date)
+wd$year<-year(wd$date)
+
+wd.wk<-wd %>% group_by(year,week) %>% summarize_at(c("prcp","HDD","CDD","snow"),sum,na.rm=T)
+wd.wk.tmean<-wd %>% group_by(year,week) %>% summarize_at(c("tmean"),mean,na.rm=T)
+
+wd.wk<-left_join(wd.wk,wd.wk.tmean)
+
+#units are a litte funny and worth double checking. prcp is in tenths of millimeters.
+#units can be checked here. https://www1.ncdc.noaa.gov/pub/data/ghcn/daily/readme.txt
+
+wd.wk$prcp<-wd.wk$prcp/10*0.0393701 #convert to basic milimeters then to inches. 
+wd.wk$snow<-wd.wk$snow*0.0393701 #snow is in milimeters. 
+
+```
+
+```{r join datasets, include=FALSE,warning=FALSE}
+crime$incident_type %<>% as.factor()
+
+
+crime$week<-week(crime$date)
+crime$year<-year(crime$date)
+
+crime2<-crime %>% group_by(grid,year,week,incident) %>% summarise_at("count",sum)
+crime2$grid %<>% as.factor()
+crime2$incident %<>% as.factor()
+#need to now expand this grid to ensure every block has a combination of week and year. 
+
+combs<- crime2$grid %>% as.factor() %>% levels() %>%  expand.grid(seq(1,52,1),seq(2014,2019,1),levels(crime2$incident)) %>% as_tibble()
+names(combs)<-c("grid","week","year","incident")
+
+crime2<-left_join(combs,crime2) #%>% fct_explicit_na()
+crime2$incident %<>% fct_explicit_na(na_level = "N/A")
+crime2$count[is.na(crime2$count)]<-0  #missing values basically represent "nothing happening" and should then get a 0 count assigned. 
+
+#full base dataset for logistic and multinomial modeling
+
+crime2<-left_join(crime2,sue2,by=c("week","year")) %>% as_tibble()    #joining the economic data
+
+crime2<-left_join(crime2,wd.wk,by=c("week","year"))   #joining weather data
+
+```
+
+
+#initial plots and modelling 
+Firstly, most crimes seem to follow a very cyclical pattern between summer and winter. The adage that warmer temps and crimes like aggravated assualt seem to generally be true. We'll plot a few graphs here to illustrate.
+
+
+```{r plots, include=FALSE}
+#First most, crimes seem
+incidents<-levels(crime2$incident) %>% enframe()
+
+temp.plot<-function(data,plotname){
+          ggplot(data=data,aes(x=tmean,y=count)) + geom_point() + ggtitle(plotname) + xlab("weekly mean temperature") + ylab("weekly count of crime")
+}
+
+econ.plot<-function(data,plotname){
+          ggplot(data=data,aes(x=unemploy_rate,y=count)) + geom_point() + ggtitle(plotname) + xlab("weekly unemployment rate") + ylab("weekly count of crime")
+}
+
+gg1<- crime2 %>% group_by(incident,tmean) %>% summarise_at("count",sum) %>% group_by(incident) %>% nest() %>%
+          mutate(ggs=map2(data,incident,temp.plot))
+
+
+gg2<- crime2 %>% group_by(incident,unemploy_rate) %>% summarise_at("count",sum) %>% group_by(incident) %>%                nest() %>% mutate(ggs=map2(data,incident,econ.plot))
+
+
+```
+
+
+
+```{r print plots, include=TRUE, warning=FALSE,message=FALSE}
+#crimes by mean weekly temp 
+grid.arrange(gg1$ggs[[1]],gg1$ggs[[2]],gg1$ggs[[3]],gg1$ggs[[7]],nrow=2)
+
+grid.arrange(gg2$ggs[[1]],gg2$ggs[[2]],gg2$ggs[[3]],gg2$ggs[[7]],nrow=2)
+```
+
+
+#inital modeling
+We'll start out exploring some models. 
+```{r train data}
+crime2$month<-month(crime2$ym) %>% as_factor()
+crime2$incident2<-ifelse(crime2$count==0,"0",crime2$incident) %>% as_factor()
+
+cumsumLag4 <- function(x) cumsum(c(0, head(x, n = -4))) 
+
+#Need to get a differenced crime outcome variable. Based on what the crime sums were from the month before?
+crime2<-crime2 %>% arrange(ym) %>% group_by(grid,week,year,incident) %>% mutate(laggedc=lag(count,order_by=ym,n=1))
+crime2$laggedc[is.na(crime2$laggedc)]<-0
+
+#crime2<-crime2 %>% arrange(ym) %>% group_by(grid,week,year,incident) %>% mutate(lagcum=cumsumLag4(.$count))
+
+train<-crime2[complete.cases(crime2) & crime2$year %in% c(2015:2017),]   #The train data. 
+
+```
+
+#Poisson regression
+The first research framework is to try to model the counts of different incidents within a given week and grid. We can vary the timeframe as needed, month might make more sense eventually. The Poisson distribution makes most sense because we are trying to model positive discrete counts within these bands. 
+
+We can use the generalized linear model function glm to model data that doesn't inherently have a normal distribution, using a log-link function. We'll treat the incident types as independent. 
+
+```{r Possion, include = T,warning=FALSE}
+#Create a function for generating models
+poissmodel<- function(data){
+            glm(data=data,count~grid + unemploy_rate + prcp + snow + HDD + CDD +    
+                  tmean + laggedc, 
+                  family= poisson(link="log")                     )    
+          }
+  
+#Fit the models to the incident data using nested tibbles 
+pois.mods<- train %>% group_by(incident) %>% nest() %>%               
+      mutate(mods=map(data,poissmodel))
+
+
+
+```
+
+Before analyzing Poisson model results, we need to check for overdispersion. If the Residual Deviance is greater than the degrees of freedom, then over-dispersion exists. This means that the estimates are correct, but the standard errors (standard deviation) are wrong and unaccounted for by the model.

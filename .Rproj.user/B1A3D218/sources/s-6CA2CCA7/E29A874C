@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1576710080496.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1121791240",
+    "id" : "E29A874C",
+    "lastKnownWriteTime" : 1578617510,
+    "last_content_update" : 1578617510010,
+    "path" : "~/Documents/GitHub/dps-stats/dps_data_process.R",
+    "project_path" : "dps_data_process.R",
+    "properties" : {
+        "cursorPosition" : "128,0",
+        "scrollLine" : "110",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

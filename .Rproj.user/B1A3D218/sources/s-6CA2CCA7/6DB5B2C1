@@ -1,0 +1,27 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1578616829645.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1741843473",
+    "id" : "6DB5B2C1",
+    "lastKnownWriteTime" : 1578621780,
+    "last_content_update" : 1578621780662,
+    "path" : "~/Documents/GitHub/dps-stats/visualizations.Rmd",
+    "project_path" : "visualizations.Rmd",
+    "properties" : {
+        "cursorPosition" : "36,0",
+        "last_setup_crc32" : "542CB770160223e8",
+        "scrollLine" : "19",
+        "tempName" : "Untitled1"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 7,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}
